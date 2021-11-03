@@ -1,4 +1,5 @@
 pub mod traits;
+pub mod scan;
 
 use std::mem::size_of;
 use std::path::Path;
@@ -225,10 +226,6 @@ impl MemHook {
         let bytes = value.to_bytes();
         self.write_bytes_ptr(base, offsets, &bytes)
     }
-
-    //---------- Memory Scanning Functions ---------->
-
-
 
     //---------- Other Functions ---------->
 
