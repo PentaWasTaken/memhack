@@ -1,28 +1,26 @@
 pub mod traits;
 
-mod bindings {
-    windows::include_bindings!();
-}
-
 use std::mem::size_of;
 use std::path::Path;
 use std::ptr;
 
 use traits::*;
 
-use bindings::Windows::Win32::Foundation::{CloseHandle, HANDLE, HINSTANCE, PSTR};
-#[allow(unused_imports)]
-use bindings::Windows::Win32::System::Diagnostics::Debug::{
-    GetLastError, ReadProcessMemory, WriteProcessMemory,
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HINSTANCE, PSTR};
+use windows::Win32::System::Diagnostics::Debug::{
+    ReadProcessMemory, WriteProcessMemory,
 };
-use bindings::Windows::Win32::System::Diagnostics::ToolHelp::{
+use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32,
 };
-use bindings::Windows::Win32::System::ProcessStatus::{
+use windows::Win32::System::ProcessStatus::{
     K32EnumProcessModules, K32GetModuleFileNameExA,
 };
-use bindings::Windows::Win32::System::SystemServices::CHAR;
-use bindings::Windows::Win32::System::Threading::OpenProcess;
+use windows::Win32::Foundation::CHAR;
+use windows::Win32::System::Threading::OpenProcess;
+
+#[allow(unused_imports)]
+use windows::Win32::Foundation::GetLastError;
 
 const PROCESS_ACCESS_RIGHTS: u32 = 0x10 | 0x20 | 0x8 | 0x400; //PROCESS_VM_READ || PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_QUERY_INFORMATION
 
@@ -31,13 +29,14 @@ pub struct MemHook {
 }
 
 impl MemHook {
+    //---------- Initialization Functions ----------
     pub fn from_pid(pid: u32) -> Option<Self> {
         let handle: HANDLE;
         unsafe {
             handle = OpenProcess(PROCESS_ACCESS_RIGHTS.into(), false, pid);
         }
 
-        if handle.is_null() {
+        if handle.0 == 0 {
             None
         } else {
             Some(MemHook { handle })
@@ -121,6 +120,8 @@ impl MemHook {
         None
     }
 
+    //---------- Memory Reading Functions ---------->
+
     pub fn get_pointer_address(&self, mut base: usize, offsets: &[usize]) -> Option<usize> {
         if offsets.is_empty() {
             return Some(base);
@@ -190,6 +191,8 @@ impl MemHook {
         T::from_bytes(&bytes)
     }
 
+    //---------- Memory Writing Functions ---------->
+
     pub fn write_bytes(&self, address: usize, bytes_to_write: &[u8]) -> Result<(), usize> {
         let mut bytes_written: usize = 0;
         let successful = unsafe {
@@ -222,6 +225,12 @@ impl MemHook {
         let bytes = value.to_bytes();
         self.write_bytes_ptr(base, offsets, &bytes)
     }
+
+    //---------- Memory Scanning Functions ---------->
+
+
+
+    //---------- Other Functions ---------->
 
     pub fn close(self) {
         unsafe {
