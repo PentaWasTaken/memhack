@@ -12,15 +12,19 @@ use traits::*;
 
 use bindings::Windows::Win32::Foundation::{CloseHandle, HANDLE, HINSTANCE, PSTR};
 #[allow(unused_imports)]
-use bindings::Windows::Win32::System::Diagnostics::Debug::{GetLastError, ReadProcessMemory};
+use bindings::Windows::Win32::System::Diagnostics::Debug::{
+    GetLastError, ReadProcessMemory, WriteProcessMemory,
+};
 use bindings::Windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32,
 };
-use bindings::Windows::Win32::System::ProcessStatus::{K32EnumProcessModules, K32GetModuleFileNameExA};
+use bindings::Windows::Win32::System::ProcessStatus::{
+    K32EnumProcessModules, K32GetModuleFileNameExA,
+};
 use bindings::Windows::Win32::System::SystemServices::CHAR;
 use bindings::Windows::Win32::System::Threading::OpenProcess;
 
-const PROCESS_ACCESS_RIGHTS: u32 = 0x10 | 0x20 | 0x400; //PROCESS_VM_READ || PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION
+const PROCESS_ACCESS_RIGHTS: u32 = 0x10 | 0x20 | 0x8 | 0x400; //PROCESS_VM_READ || PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_QUERY_INFORMATION
 
 pub struct MemHook {
     handle: HANDLE,
@@ -93,8 +97,13 @@ impl MemHook {
             {
                 for i in 0..(bytes_needed / size_of::<HINSTANCE>() as u32) {
                     let mut mod_name = [0u8; 1024];
-                    
-                    let str_len = K32GetModuleFileNameExA(self.handle, modules[i as usize], PSTR(&mut mod_name as *mut _) , mod_name.len() as _);
+
+                    let str_len = K32GetModuleFileNameExA(
+                        self.handle,
+                        modules[i as usize],
+                        PSTR(&mut mod_name as *mut _),
+                        mod_name.len() as _,
+                    );
 
                     let str_mod_name = std::str::from_utf8(&mod_name[..(str_len as usize)]).ok()?;
 
@@ -108,9 +117,19 @@ impl MemHook {
                     }
                 }
             }
-
         }
         None
+    }
+
+    pub fn get_pointer_address(&self, mut base: usize, offsets: &[usize]) -> Option<usize> {
+        if offsets.is_empty() {
+            return Some(base);
+        }
+
+        for offset in offsets.iter().take(offsets.len() - 1) {
+            base = self.read_val(base + offset)?;
+        }
+        Some(base + offsets.get(offsets.len() - 1).unwrap_or(&0))
     }
 
     pub fn read_bytes_const<const N: usize>(&self, address: usize) -> Option<[u8; N]> {
@@ -129,6 +148,11 @@ impl MemHook {
             }
         }
         Some(buffer)
+    }
+
+    pub fn read_bytes_const_ptr<const N: usize>(&self, base: usize, offsets: &[usize]) -> Option<[u8; N]> {
+        let address = self.get_pointer_address(base, offsets).unwrap();
+        self.read_bytes_const(address)
     }
 
     pub fn read_bytes(&self, address: usize, bytes_to_read: usize) -> Option<Vec<u8>> {
@@ -150,26 +174,53 @@ impl MemHook {
         Some(buffer)
     }
 
-    pub fn get_pointer_address(&self, mut base: usize, offsets: &[usize]) -> Option<usize> {
-        if offsets.is_empty() {
-            return Some(base);
-        }
-
-        for offset in offsets.iter().take(offsets.len() - 1) {
-            base = self.read(base + offset)?;
-        }
-        Some(base + offsets.get(offsets.len() - 1).unwrap_or(&0))
+    pub fn read_bytes_ptr(&self, base: usize, offsets: &[usize], bytes_to_read: usize) -> Option<Vec<u8>> {
+        let address = self.get_pointer_address(base, offsets).unwrap();
+        self.read_bytes(address, bytes_to_read)
     }
 
-    pub fn read<T: FromBytes>(&self, address: usize) -> Option<T> {
+    pub fn read_val<T: FromBytes>(&self, address: usize) -> Option<T> {
         let bytes = self.read_bytes(address, size_of::<T>())?;
         T::from_bytes(&bytes)
     }
 
-    pub fn read_pointer<T: FromBytes>(&self, base: usize, offsets: &[usize]) -> Option<T> {
+    pub fn read_val_ptr<T: FromBytes>(&self, base: usize, offsets: &[usize]) -> Option<T> {
         let address = self.get_pointer_address(base, offsets)?;
         let bytes = self.read_bytes(address, size_of::<T>())?;
         T::from_bytes(&bytes)
+    }
+
+    pub fn write_bytes(&self, address: usize, bytes_to_write: &[u8]) -> Result<(), usize> {
+        let mut bytes_written: usize = 0;
+        let successful = unsafe {
+            WriteProcessMemory(
+                self.handle,
+                address as *mut _,
+                bytes_to_write.as_ptr() as *const _,
+                bytes_to_write.len(),
+                &mut bytes_written as *mut _,
+            )
+        };
+
+        if successful.as_bool() {
+            return Ok(());
+        }
+        Err(bytes_written)
+    }
+
+    pub fn write_bytes_ptr(&self, base: usize, offsets: &[usize], bytes_to_write: &[u8]) -> Result<(), usize> {
+        let address = self.get_pointer_address(base, offsets).unwrap();
+        self.write_bytes(address, bytes_to_write)
+    }
+
+    pub fn write_val<T: ToBytes>(&self, address: usize, value: T) -> Result<(), usize> {
+        let bytes = value.to_bytes();
+        self.write_bytes(address, &bytes)
+    }
+
+    pub fn write_val_ptr<T: ToBytes>(&self, base: usize, offsets: &[usize], value: T) -> Result<(), usize> {
+        let bytes = value.to_bytes();
+        self.write_bytes_ptr(base, offsets, &bytes)
     }
 
     pub fn close(self) {
