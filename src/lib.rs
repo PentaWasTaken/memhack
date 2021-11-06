@@ -1,5 +1,5 @@
-pub mod traits;
 pub mod scan;
+pub mod traits;
 
 use std::mem::size_of;
 use std::path::Path;
@@ -7,17 +7,13 @@ use std::ptr;
 
 use traits::*;
 
+use windows::Win32::Foundation::CHAR;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HINSTANCE, PSTR};
-use windows::Win32::System::Diagnostics::Debug::{
-    ReadProcessMemory, WriteProcessMemory,
-};
+use windows::Win32::System::Diagnostics::Debug::{ReadProcessMemory, WriteProcessMemory};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32,
 };
-use windows::Win32::System::ProcessStatus::{
-    K32EnumProcessModules, K32GetModuleFileNameExA,
-};
-use windows::Win32::Foundation::CHAR;
+use windows::Win32::System::ProcessStatus::{K32EnumProcessModules, K32GetModuleFileNameExA};
 use windows::Win32::System::Threading::OpenProcess;
 
 #[allow(unused_imports)]
@@ -152,7 +148,11 @@ impl MemHook {
         Some(buffer)
     }
 
-    pub fn read_bytes_const_ptr<const N: usize>(&self, base: usize, offsets: &[usize]) -> Option<[u8; N]> {
+    pub fn read_bytes_const_ptr<const N: usize>(
+        &self,
+        base: usize,
+        offsets: &[usize],
+    ) -> Option<[u8; N]> {
         let address = self.get_pointer_address(base, offsets).unwrap();
         self.read_bytes_const(address)
     }
@@ -176,7 +176,12 @@ impl MemHook {
         Some(buffer)
     }
 
-    pub fn read_bytes_ptr(&self, base: usize, offsets: &[usize], bytes_to_read: usize) -> Option<Vec<u8>> {
+    pub fn read_bytes_ptr(
+        &self,
+        base: usize,
+        offsets: &[usize],
+        bytes_to_read: usize,
+    ) -> Option<Vec<u8>> {
         let address = self.get_pointer_address(base, offsets).unwrap();
         self.read_bytes(address, bytes_to_read)
     }
@@ -212,7 +217,12 @@ impl MemHook {
         Err(bytes_written)
     }
 
-    pub fn write_bytes_ptr(&self, base: usize, offsets: &[usize], bytes_to_write: &[u8]) -> Result<(), usize> {
+    pub fn write_bytes_ptr(
+        &self,
+        base: usize,
+        offsets: &[usize],
+        bytes_to_write: &[u8],
+    ) -> Result<(), usize> {
         let address = self.get_pointer_address(base, offsets).unwrap();
         self.write_bytes(address, bytes_to_write)
     }
@@ -222,7 +232,12 @@ impl MemHook {
         self.write_bytes(address, &bytes)
     }
 
-    pub fn write_val_ptr<T: ToBytes>(&self, base: usize, offsets: &[usize], value: T) -> Result<(), usize> {
+    pub fn write_val_ptr<T: ToBytes>(
+        &self,
+        base: usize,
+        offsets: &[usize],
+        value: T,
+    ) -> Result<(), usize> {
         let bytes = value.to_bytes();
         self.write_bytes_ptr(base, offsets, &bytes)
     }
