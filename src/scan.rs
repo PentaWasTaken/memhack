@@ -42,12 +42,48 @@ pub fn aob_scan(
             continue;
         }
         results.extend(
-            subslice_positions(&data.unwrap(), &bytes)
+            subslice_positions(&data.unwrap(), bytes)
                 .into_iter()
                 .map(|x| x + reg_start),
         );
     }
     results
+}
+
+pub fn aob_scan_first(
+    memhook: &MemHook,
+    bytes: &[u8],
+    start: Option<usize>,
+    end: Option<usize>,
+) -> Option<usize> {
+    let start = start.unwrap_or(0);
+    let end = end.unwrap_or(usize::MAX);
+
+    let pages = memory_regions(&memhook)
+        .into_iter()
+        .filter(|p| p.Protect.0 & PAGE_PROTECTION_MASK != 0)
+        .filter(|p| {
+            let (reg_start, reg_end) = (
+                p.BaseAddress as usize,
+                p.BaseAddress as usize + p.RegionSize,
+            );
+            reg_start <= end && start <= reg_end
+        });
+    
+    for page in pages {
+        let reg_start = page.BaseAddress as usize;
+        let bytes_to_read = page.RegionSize;
+
+        let data = memhook.read_bytes(reg_start as usize, bytes_to_read);
+        if data == None {
+            continue;
+        }
+
+        if let Some(pos) = data.unwrap().find(bytes) {
+            return Some(reg_start + pos);
+        }
+    }
+    None
 }
 
 fn subslice_positions(haystack: &[u8], needle: &[u8]) -> Vec<usize> {
