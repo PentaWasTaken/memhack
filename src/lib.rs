@@ -182,8 +182,11 @@ impl MemHook {
         offsets: &[usize],
         bytes_to_read: usize,
     ) -> Option<Vec<u8>> {
-        let address = self.get_pointer_address(base, offsets).unwrap();
-        self.read_bytes(address, bytes_to_read)
+        let address = self.get_pointer_address(base, offsets);
+        if let Some(address) = address {
+            return self.read_bytes(address, bytes_to_read);
+        }
+        None
     }
 
     pub fn read_val<T: FromBytes>(&self, address: usize) -> Option<T> {
@@ -223,8 +226,9 @@ impl MemHook {
         offsets: &[usize],
         bytes_to_write: &[u8],
     ) -> Result<(), usize> {
-        let address = self.get_pointer_address(base, offsets).unwrap();
-        self.write_bytes(address, bytes_to_write)
+        let address = self.get_pointer_address(base, offsets);
+        if address.is_none() {return Err(0);}
+        self.write_bytes(address.unwrap(), bytes_to_write)
     }
 
     pub fn write_val<T: ToBytes>(&self, address: usize, value: T) -> Result<(), usize> {
