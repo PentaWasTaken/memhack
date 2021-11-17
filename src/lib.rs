@@ -1,6 +1,9 @@
 pub mod scan;
 pub mod traits;
 
+mod error;
+pub use error::MemHackError;
+
 use std::mem::size_of;
 use std::path::Path;
 use std::ptr;
@@ -27,20 +30,20 @@ pub struct MemHook {
 
 impl MemHook {
     //---------- Initialization Functions ----------
-    pub fn from_pid(pid: u32) -> Option<Self> {
+    pub fn from_pid(pid: u32) -> Result<Self, MemHackError> {
         let handle: HANDLE;
         unsafe {
             handle = OpenProcess(PROCESS_ACCESS_RIGHTS.into(), false, pid);
         }
 
         if handle.0 == 0 {
-            None
+            Err(MemHackError::CreateHookError)
         } else {
-            Some(MemHook { handle })
+            Ok(MemHook { handle })
         }
     }
 
-    pub fn from_process(process_name: &str) -> Option<Self> {
+    pub fn from_process(process_name: &str) -> Result<Self, MemHackError> {
         unsafe {
             let snapshot = CreateToolhelp32Snapshot(0x2.into(), 0);
 
@@ -69,16 +72,16 @@ impl MemHook {
 
                     if !Process32Next(snapshot, &mut process).as_bool() {
                         CloseHandle(snapshot);
-                        return None;
+                        return Err(MemHackError::CreateHookError);
                     }
                 }
             }
             CloseHandle(snapshot);
-            None
         }
+        Err(MemHackError::CreateHookError)
     }
 
-    pub fn get_module_base_address(&self, module: &str) -> Option<usize> {
+    pub fn get_module_base_address(&self, module: &str) -> Result<usize, MemHackError> {
         let modules = &mut [HINSTANCE::default(); 1024];
         let mut bytes_needed = 0u32;
 
@@ -101,36 +104,39 @@ impl MemHook {
                         mod_name.len() as _,
                     );
 
-                    let str_mod_name = std::str::from_utf8(&mod_name[..(str_len as usize)]).ok()?;
+                    let str_mod_name = std::str::from_utf8(&mod_name[..(str_len as usize)]);
+                    if let Err(_) = str_mod_name {
+                        continue;
+                    }
 
-                    let path = Path::new(str_mod_name);
+                    let path = Path::new(str_mod_name.unwrap());
                     let filename = path.file_name();
 
                     if let Some(f) = filename {
                         if f == module {
-                            return Some(modules[i as usize].0 as _);
+                            return Ok(modules[i as usize].0 as _);
                         }
                     }
                 }
             }
         }
-        None
+        Err(MemHackError::ModuleNotFound(module.to_string()))
     }
 
     //---------- Memory Reading Functions ---------->
 
-    pub fn get_pointer_address(&self, mut base: usize, offsets: &[usize]) -> Option<usize> {
+    pub fn get_pointer_address(&self, mut base: usize, offsets: &[usize]) -> Result<usize, MemHackError> {
         if offsets.is_empty() {
-            return Some(base);
+            return Ok(base);
         }
 
         for offset in offsets.iter().take(offsets.len() - 1) {
             base = self.read_val(base + offset)?;
         }
-        Some(base + offsets.get(offsets.len() - 1).unwrap_or(&0))
+        Ok(base + offsets.get(offsets.len() - 1).unwrap())
     }
 
-    pub fn read_bytes_const<const N: usize>(&self, address: usize) -> Option<[u8; N]> {
+    pub fn read_bytes_const<const N: usize>(&self, address: usize) -> Result<[u8; N], MemHackError> {
         let mut buffer = [0u8; N];
         unsafe {
             let successful = ReadProcessMemory(
@@ -142,22 +148,22 @@ impl MemHook {
             );
 
             if !successful.as_bool() {
-                return None;
+                return Err(MemHackError::MemoryReadError {address, bytes_to_read: N});
             }
         }
-        Some(buffer)
+        Ok(buffer)
     }
 
     pub fn read_bytes_const_ptr<const N: usize>(
         &self,
         base: usize,
         offsets: &[usize],
-    ) -> Option<[u8; N]> {
-        let address = self.get_pointer_address(base, offsets).unwrap();
+    ) -> Result<[u8; N], MemHackError> {
+        let address = self.get_pointer_address(base, offsets)?;
         self.read_bytes_const(address)
     }
 
-    pub fn read_bytes(&self, address: usize, bytes_to_read: usize) -> Option<Vec<u8>> {
+    pub fn read_bytes(&self, address: usize, bytes_to_read: usize) -> Result<Vec<u8>, MemHackError> {
         let mut buffer: Vec<u8> = Vec::with_capacity(bytes_to_read);
         unsafe {
             buffer.set_len(bytes_to_read);
@@ -170,10 +176,10 @@ impl MemHook {
             );
 
             if !successful.as_bool() {
-                return None;
+                return Err(MemHackError::MemoryReadError {address, bytes_to_read});
             }
         }
-        Some(buffer)
+        Ok(buffer)
     }
 
     pub fn read_bytes_ptr(
@@ -181,28 +187,31 @@ impl MemHook {
         base: usize,
         offsets: &[usize],
         bytes_to_read: usize,
-    ) -> Option<Vec<u8>> {
-        let address = self.get_pointer_address(base, offsets);
-        if let Some(address) = address {
-            return self.read_bytes(address, bytes_to_read);
-        }
-        None
+    ) -> Result<Vec<u8>, MemHackError> {
+        let address = self.get_pointer_address(base, offsets)?;
+        self.read_bytes(address, bytes_to_read)
     }
 
-    pub fn read_val<T: FromBytes>(&self, address: usize) -> Option<T> {
+    pub fn read_val<T: FromBytes>(&self, address: usize) -> Result<T, MemHackError> {
         let bytes = self.read_bytes(address, size_of::<T>())?;
-        T::from_bytes(&bytes)
+        match T::from_bytes(&bytes) {
+            Some(value) => Ok(value),
+            None => Err(MemHackError::MemoryReadError {address, bytes_to_read: size_of::<T>()})
+        }
     }
 
-    pub fn read_val_ptr<T: FromBytes>(&self, base: usize, offsets: &[usize]) -> Option<T> {
+    pub fn read_val_ptr<T: FromBytes>(&self, base: usize, offsets: &[usize]) -> Result<T, MemHackError> {
         let address = self.get_pointer_address(base, offsets)?;
         let bytes = self.read_bytes(address, size_of::<T>())?;
-        T::from_bytes(&bytes)
+        match T::from_bytes(&bytes) {
+            Some(value) => Ok(value),
+            None => Err(MemHackError::MemoryReadError {address, bytes_to_read: size_of::<T>()})
+        }
     }
 
     //---------- Memory Writing Functions ---------->
 
-    pub fn write_bytes(&self, address: usize, bytes_to_write: &[u8]) -> Result<(), usize> {
+    pub fn write_bytes(&self, address: usize, bytes_to_write: &[u8]) -> Result<(), MemHackError> {
         let mut bytes_written: usize = 0;
         let successful = unsafe {
             WriteProcessMemory(
@@ -217,7 +226,7 @@ impl MemHook {
         if successful.as_bool() {
             return Ok(());
         }
-        Err(bytes_written)
+        Err(MemHackError::MemoryWriteError {address, bytes_written})
     }
 
     pub fn write_bytes_ptr(
@@ -225,13 +234,12 @@ impl MemHook {
         base: usize,
         offsets: &[usize],
         bytes_to_write: &[u8],
-    ) -> Result<(), usize> {
-        let address = self.get_pointer_address(base, offsets);
-        if address.is_none() {return Err(0);}
-        self.write_bytes(address.unwrap(), bytes_to_write)
+    ) -> Result<(), MemHackError> {
+        let address = self.get_pointer_address(base, offsets)?;
+        self.write_bytes(address, bytes_to_write)
     }
 
-    pub fn write_val<T: ToBytes>(&self, address: usize, value: T) -> Result<(), usize> {
+    pub fn write_val<T: ToBytes>(&self, address: usize, value: T) -> Result<(), MemHackError> {
         let bytes = value.to_bytes();
         self.write_bytes(address, &bytes)
     }
@@ -241,7 +249,7 @@ impl MemHook {
         base: usize,
         offsets: &[usize],
         value: T,
-    ) -> Result<(), usize> {
+    ) -> Result<(), MemHackError> {
         let bytes = value.to_bytes();
         self.write_bytes_ptr(base, offsets, &bytes)
     }

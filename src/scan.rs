@@ -38,7 +38,7 @@ pub fn aob_scan(
         let bytes_to_read = page.RegionSize;
 
         let data = memhook.read_bytes(reg_start as usize, bytes_to_read);
-        if data == None {
+        if data.is_err() {
             continue;
         }
         results.extend(
@@ -69,13 +69,13 @@ pub fn aob_scan_first(
             );
             reg_start <= end && start <= reg_end
         });
-    
+
     for page in pages {
         let reg_start = page.BaseAddress as usize;
         let bytes_to_read = page.RegionSize;
 
         let data = memhook.read_bytes(reg_start as usize, bytes_to_read);
-        if data == None {
+        if data.is_err() {
             continue;
         }
 
